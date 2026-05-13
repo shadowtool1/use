@@ -8,6 +8,7 @@ import requests
 from datetime import datetime, timedelta
 
 from flask import Flask, jsonify, request
+from flask_cors import CORS
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import Message
 from aiogram.utils import executor
@@ -17,11 +18,9 @@ nest_asyncio.apply()
 
 # ========== ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ==========
 BOT_TOKEN = os.environ.get('BOT_TOKEN', '')
-ADMIN_ID = os.environ.get('ADMIN_ID', '')  # Просто число, без запятых
+ADMIN_ID = os.environ.get('ADMIN_ID', '')
 WHITELIST_GIST_URL = os.environ.get('WHITELIST_GIST_URL', 'https://gist.githubusercontent.com/shadowtool1/af1959fc4b147c2ddc549c862d63cd9b/raw/whitelist.json')
-API_BASE_URL = os.environ.get('API_BASE_URL', 'https://твой-сайт.ru')  # Адрес твоего сайта
 
-# Проверка
 if not BOT_TOKEN:
     print("❌ Ошибка: BOT_TOKEN не задан")
     sys.exit(1)
@@ -86,6 +85,18 @@ def is_admin(user_id):
 
 # ========== FLASK API ==========
 flask_app = Flask(__name__)
+CORS(flask_app)  # Разрешает запросы с любых сайтов (GitHub Pages)
+
+@flask_app.route('/')
+def index():
+    return jsonify({
+        'message': 'Shadow Tool API is running',
+        'endpoints': ['/health', '/register', '/login', '/me', '/check_subscription', '/is_whitelisted']
+    })
+
+@flask_app.route('/health')
+def health():
+    return jsonify({'status': 'ok'})
 
 @flask_app.route('/register', methods=['POST'])
 def register():
@@ -205,10 +216,6 @@ def is_whitelisted():
     except Exception as e:
         print(f"Ошибка загрузки белого списка: {e}")
         return jsonify({'blocked': False})
-
-@flask_app.route('/health', methods=['GET'])
-def health():
-    return jsonify({'status': 'ok'})
 
 # ========== TELEGRAM БОТ ==========
 bot = Bot(token=BOT_TOKEN)
@@ -353,7 +360,7 @@ def run_web():
 async def main():
     print(f"🚀 SHADOW TOOL запущен")
     print(f"📡 API: http://0.0.0.0:8080")
-    print(f"🤖 Бот: @{bot.get_me().username}")
+    print(f"🤖 Бот: https://t.me/{(await bot.get_me()).username}")
 
 if __name__ == '__main__':
     from threading import Thread
