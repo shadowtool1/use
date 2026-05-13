@@ -7,6 +7,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY userbot.py .
 
-VOLUME [ "/app/data" ]
-
 CMD ["python", "userbot.py"]
