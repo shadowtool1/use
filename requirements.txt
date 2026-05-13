@@ -1,0 +1,4 @@
+aiogram==2.25.1
+flask==2.3.3
+nest-asyncio==1.5.8
+requests==2.31.0
