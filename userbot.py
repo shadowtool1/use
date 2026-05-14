@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message
 from aiogram.utils import executor
 import nest_asyncio
 
@@ -106,14 +106,10 @@ ATTACK_URLS = [
 ]
 
 def normalize_phone(phone):
-    """Просто очищает номер, оставляет цифры и плюс в начале"""
     phone = phone.strip()
-    # Если есть плюс в начале — сохраняем его
     if phone.startswith('+'):
-        digits = ''.join(c for c in phone if c.isdigit())
-        return '+' + digits
+        return '+' + ''.join(c for c in phone if c.isdigit())
     else:
-        # Без плюса — просто все цифры подряд
         return ''.join(c for c in phone if c.isdigit())
 
 def hash_password(password):
@@ -129,16 +125,17 @@ async def is_phone_whitelisted(phone):
     if not WHITELIST_GIST_URL:
         return False
     
-    normalized = normalize_phone(phone)
+    search_phone = normalize_phone(phone)
     
     try:
         resp = await asyncio.to_thread(requests.get, WHITELIST_GIST_URL + '?t=' + str(int(datetime.now().timestamp())), timeout=10)
         data = resp.json()
         whitelist = data.get('phones', [])
-        # Проверяем, есть ли номер в белом списке (сравниваем без учёта форматирования)
+        
         for item in whitelist:
-            item_normalized = normalize_phone(item.get('number', ''))
-            if item_normalized == normalized:
+            item_phone = item.get('number', '')
+            item_normalized = normalize_phone(item_phone)
+            if search_phone == item_normalized:
                 return True
         return False
     except:
@@ -319,10 +316,8 @@ async def send_attack_log(telegram_id, total, current, phone, status_msg, messag
     return msg.message_id
 
 async def perform_attack(phone, telegram_id, user_id, message_id):
-    # Нормализуем номер для отображения и проверки
     normalized_phone = normalize_phone(phone)
     
-    # Проверка белого списка
     if await is_phone_whitelisted(normalized_phone):
         await bot.edit_message_text(
             f"⛔ <b>АТАКА ОТМЕНЕНА</b>\n\n📞 Номер: {phone}\n⚠️ Номер в белом списке",
@@ -355,93 +350,22 @@ async def perform_attack(phone, telegram_id, user_id, message_id):
 
 @dp.message_handler(commands=['start', 'help'])
 async def cmd_start(message: Message):
-    keyboard = InlineKeyboardMarkup(row_width=2)
-    keyboard.add(
-        InlineKeyboardButton("🎯 Атака", callback_data="help_attack"),
-        InlineKeyboardButton("🔗 Привязка", callback_data="help_bind"),
-        InlineKeyboardButton("📊 Статус", callback_data="help_status"),
-        InlineKeyboardButton("❓ Помощь", callback_data="help_help")
-    )
-    
     await message.answer(
         "🔰 <b>SHADOW TOOL</b>\n\n"
-        "💀 <b>Бот для SMS-флуда</b>\n\n"
-        "📌 <b>Быстрые команды:</b>\n"
-        "/a <code>номер</code> - запустить атаку\n"
+        "📌 <b>Команды:</b>\n"
+        "/a <code>номер</code> - атака\n"
         "/bind <code>КОД</code> - привязать аккаунт\n"
         "/unbind - отвязать Telegram\n"
-        "/status - проверить подписку\n\n"
-        "🌍 <b>Поддерживаются любые страны:</b>\n"
-        "   <code>/a +79001234567</code> (РФ)\n"
-        "   <code>/a 79001234567</code> (РФ без +)\n"
-        "   <code>/a 89001234567</code> (РФ с 8)\n"
-        "   <code>/a +375291234567</code> (Беларусь)\n"
-        "   <code>/a 375291234567</code> (Беларусь без +)\n"
-        "   <code>/a +380501234567</code> (Украина)\n\n"
-        "👇 <b>Нажми на кнопку</b>",
-        parse_mode='HTML',
-        reply_markup=keyboard
+        "/status - статус подписки",
+        parse_mode='HTML'
     )
-
-@dp.callback_query_handler(lambda c: c.data.startswith('help_'))
-async def help_callbacks(cb):
-    if cb.data == 'help_attack':
-        await cb.message.answer(
-            "🎯 <b>КАК ЗАПУСТИТЬ АТАКУ</b>\n\n"
-            "Просто отправь команду:\n"
-            "<code>/a НОМЕР</code>\n\n"
-            "<b>Примеры:</b>\n"
-            "<code>/a 79001234567</code>\n"
-            "<code>/a +79001234567</code>\n"
-            "<code>/a 89001234567</code>\n"
-            "<code>/a +375291234567</code>\n"
-            "<code>/a +380501234567</code>\n\n"
-            "📌 <b>Важно:</b> Нужна активная подписка",
-            parse_mode='HTML'
-        )
-    elif cb.data == 'help_bind':
-        await cb.message.answer(
-            "🔗 <b>КАК ПРИВЯЗАТЬ TELEGRAM</b>\n\n"
-            "1. Зайди на сайт → Профиль\n"
-            "2. Нажми «Получить код»\n"
-            "3. Отправь команду:\n"
-            "<code>/bind КОД</code>\n\n"
-            "После привязки атаки будут работать через бота",
-            parse_mode='HTML'
-        )
-    elif cb.data == 'help_status':
-        await cb.message.answer(
-            "📊 <b>ПРОВЕРКА СТАТУСА</b>\n\n"
-            "Отправь команду:\n"
-            "<code>/status</code>\n\n"
-            "Бот покажет:\n"
-            "• Твой логин\n"
-            "• Осталось дней подписки\n"
-            "• Дату истечения",
-            parse_mode='HTML'
-        )
-    else:
-        await cmd_start(cb.message)
-    
-    await cb.answer()
 
 @dp.message_handler(commands=['a'])
 async def cmd_attack_short(message: Message):
     args = message.get_args().strip()
     
     if not args:
-        await message.answer(
-            "🎯 <b>АТАКА</b>\n\n"
-            "Использование: <code>/a НОМЕР</code>\n\n"
-            "<b>Примеры:</b>\n"
-            "<code>/a 79001234567</code>\n"
-            "<code>/a +79001234567</code>\n"
-            "<code>/a 89001234567</code>\n"
-            "<code>/a +375291234567</code>\n"
-            "<code>/a +380501234567</code>\n\n"
-            "🌍 Работает с любыми странами",
-            parse_mode='HTML'
-        )
+        await message.answer("❌ /a НОМЕР\nПример: /a 79001234567")
         return
     
     user_tg_id = message.from_user.id
@@ -450,14 +374,7 @@ async def cmd_attack_short(message: Message):
     row = cursor.fetchone()
     
     if not row:
-        await message.answer(
-            "❌ <b>TELEGRAM НЕ ПРИВЯЗАН</b>\n\n"
-            "1. Зайди на сайт → Профиль\n"
-            "2. Нажми «Получить код»\n"
-            "3. Отправь <code>/bind КОД</code>\n\n"
-            "🔗 <a href='https://shadowtool1.github.io/shadowtool'>Перейти на сайт</a>",
-            parse_mode='HTML'
-        )
+        await message.answer("❌ Telegram не привязан. /bind КОД")
         return
     
     user_id = row[0]
@@ -467,29 +384,16 @@ async def cmd_attack_short(message: Message):
     sub = cursor.fetchone()
     
     if not sub:
-        await message.answer(
-            "❌ <b>НЕТ АКТИВНОЙ ПОДПИСКИ</b>\n\n"
-            "Для использования бота необходимо приобрести подписку.\n"
-            "Обратитесь к администратору: @Amnesia",
-            parse_mode='HTML'
-        )
+        await message.answer("❌ Нет активной подписки")
         return
     
     phone = args.strip()
-    
-    # Проверка: номер не пустой и содержит цифры
     digits = ''.join(c for c in phone if c.isdigit())
     if len(digits) < 5:
-        await message.answer(
-            "❌ <b>НЕВЕРНЫЙ ФОРМАТ НОМЕРА</b>\n\n"
-            "Номер должен содержать минимум 5 цифр.\n"
-            "Пример: <code>/a 79001234567</code>",
-            parse_mode='HTML'
-        )
+        await message.answer("❌ Неверный формат номера")
         return
     
-    msg = await message.answer(f"🚀 <b>Запускаю атаку на {phone}</b>\n\n⏳ Подготовка...", parse_mode='HTML')
-    
+    msg = await message.answer(f"🚀 Атака на {phone}...", parse_mode='HTML')
     asyncio.create_task(perform_attack(phone, user_tg_id, user_id, msg.message_id))
 
 @dp.message_handler(commands=['bind'])
@@ -498,18 +402,18 @@ async def cmd_bind(message: Message):
     code = message.get_args().strip()
     
     if not code:
-        await message.answer("❌ /bind КОД\nПолучите код на сайте в разделе Профиль")
+        await message.answer("❌ /bind КОД")
         return
     
     if code not in bind_codes:
-        await message.answer("❌ Неверный или просроченный код (действует 5 минут)")
+        await message.answer("❌ Неверный код")
         return
     
     user_id = bind_codes[code]
     
     cursor.execute('SELECT user_id FROM telegram_binds WHERE telegram_id=?', (user_tg_id,))
     if cursor.fetchone():
-        await message.answer("❌ Этот Telegram уже привязан к другому аккаунту")
+        await message.answer("❌ Telegram уже привязан")
         return
     
     cursor.execute('INSERT INTO telegram_binds (user_id, telegram_id, bind_date) VALUES (?, ?, ?)',
@@ -518,7 +422,7 @@ async def cmd_bind(message: Message):
     
     del bind_codes[code]
     
-    await message.answer("✅ Telegram привязан! Теперь используй /a НОМЕР")
+    await message.answer("✅ Telegram привязан! /a НОМЕР")
 
 @dp.message_handler(commands=['unbind'])
 async def cmd_unbind(message: Message):
@@ -528,9 +432,9 @@ async def cmd_unbind(message: Message):
     conn.commit()
     
     if cursor.rowcount > 0:
-        await message.answer("✅ Telegram отвязан")
+        await message.answer("✅ Отвязан")
     else:
-        await message.answer("❌ Этот Telegram не был привязан")
+        await message.answer("❌ Не был привязан")
 
 @dp.message_handler(commands=['status'])
 async def cmd_status(message: Message):
@@ -540,7 +444,7 @@ async def cmd_status(message: Message):
     row = cursor.fetchone()
     
     if not row:
-        await message.answer("❌ Telegram не привязан. Сначала привяжите аккаунт командой /bind")
+        await message.answer("❌ Telegram не привязан")
         return
     
     user_id = row[0]
@@ -550,7 +454,7 @@ async def cmd_status(message: Message):
     sub = cursor.fetchone()
     
     if not sub:
-        await message.answer("❌ Нет активной подписки")
+        await message.answer("❌ Нет подписки")
         return
     
     login, plan, end_date = sub
@@ -559,7 +463,7 @@ async def cmd_status(message: Message):
     days_left = (end - datetime.now()).days
     
     await message.answer(
-        f"✅ <b>СТАТУС ПОДПИСКИ</b>\n\n"
+        f"✅ <b>СТАТУС</b>\n\n"
         f"👤 Логин: {login}\n"
         f"📅 Осталось: {days_left} дн.\n"
         f"📆 Истекает: {end.strftime('%d.%m.%Y')}",
@@ -570,7 +474,6 @@ async def cmd_status(message: Message):
 @dp.message_handler(commands=['users'])
 async def cmd_users(message: Message):
     if not is_admin(message.from_user.id):
-        await message.answer("❌ Доступ запрещён")
         return
     
     cursor.execute('''
@@ -588,7 +491,7 @@ async def cmd_users(message: Message):
     
     out = "👥 <b>ПОЛЬЗОВАТЕЛИ</b>\n\n"
     for uid, login, created, plan, end_date, tg_id in rows:
-        sub_info = f"\n   📅 {plan.replace('_days', '')} дн. до {end_date[:10]}" if plan else "\n   ❌ Нет подписки"
+        sub_info = f"\n   📅 {plan.replace('_days', '')} дн." if plan else "\n   ❌ Нет подписки"
         tg_info = f"\n   🤖 Telegram: {'✅' if tg_id else '❌'}"
         out += f"• {login} (ID: {uid})\n   📅 Рег: {created[:10]}{sub_info}{tg_info}\n\n"
         if len(out) > 3500:
@@ -630,7 +533,7 @@ async def cmd_addsub(message: Message):
                    (user_id, user_login, f"{days}_days", start_date.isoformat(), end_date.isoformat()))
     conn.commit()
     
-    await message.answer(f"✅ Подписка на {days} дней выдана {user_login}\n📅 Истекает: {end_date.strftime('%d.%m.%Y')}")
+    await message.answer(f"✅ Подписка на {days} дней для {user_login} до {end_date.strftime('%d.%m.%Y')}")
 
 @dp.message_handler(commands=['delsub'])
 async def cmd_delsub(message: Message):
