@@ -18,18 +18,26 @@ nest_asyncio.apply()
 
 # ========== ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ==========
 BOT_TOKEN = os.environ.get('BOT_TOKEN', '')
-ADMIN_ID = os.environ.get('ADMIN_ID', '')
+ADMIN_IDS_RAW = os.environ.get('ADMIN_ID', '')
 WHITELIST_GIST_URL = os.environ.get('WHITELIST_GIST_URL', 'https://gist.githubusercontent.com/shadowtool1/af1959fc4b147c2ddc549c862d63cd9b/raw/whitelist.json')
+
+# Парсим ADMIN_ID (поддержка одного или нескольких ID через запятую)
+ADMIN_IDS = []
+if ADMIN_IDS_RAW:
+    for part in ADMIN_IDS_RAW.split(','):
+        part = part.strip()
+        if part.isdigit():
+            ADMIN_IDS.append(int(part))
 
 if not BOT_TOKEN:
     print("❌ Ошибка: BOT_TOKEN не задан")
     sys.exit(1)
 
-if not ADMIN_ID:
-    print("❌ Ошибка: ADMIN_ID не задан")
+if not ADMIN_IDS:
+    print("❌ Ошибка: ADMIN_ID не задан или не содержит корректных ID")
     sys.exit(1)
 
-ADMIN_ID = int(ADMIN_ID)
+print(f"✅ Администраторы: {ADMIN_IDS}")
 
 # ========== БАЗА ДАННЫХ ==========
 VOLUME_PATH = os.environ.get('VOLUME_MOUNTS', '/app/data')
@@ -81,11 +89,11 @@ def generate_token():
     return secrets.token_urlsafe(32)
 
 def is_admin(user_id):
-    return user_id == ADMIN_ID
+    return user_id in ADMIN_IDS
 
 # ========== FLASK API ==========
 flask_app = Flask(__name__)
-CORS(flask_app)  # Разрешает запросы с любых сайтов (GitHub Pages)
+CORS(flask_app)
 
 @flask_app.route('/')
 def index():
@@ -141,6 +149,7 @@ def login():
     
     user_id = row[0]
     
+    # Удаляем старые сессии
     cursor.execute('DELETE FROM web_sessions WHERE user_id=?', (user_id,))
     
     token = generate_token()
@@ -354,12 +363,12 @@ async def cmd_stats(message: Message):
 
 # ========== ВЕБ-СЕРВЕР ==========
 def run_web():
-    flask_app.run(host='0.0.0.0', port=8080, debug=False)
+    port = int(os.environ.get('PORT', 8080))
+    flask_app.run(host='0.0.0.0', port=port, debug=False)
 
 # ========== ЗАПУСК ==========
 async def main():
     print(f"🚀 SHADOW TOOL запущен")
-    print(f"📡 API: http://0.0.0.0:8080")
     print(f"🤖 Бот: https://t.me/{(await bot.get_me()).username}")
 
 if __name__ == '__main__':
