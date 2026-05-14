@@ -239,11 +239,13 @@ async def cmd_start(message: Message):
     await message.answer(
         "🔰 <b>SHADOW TOOL - АДМИН ПАНЕЛЬ</b>\n\n"
         "<b>📋 ПОДПИСКИ</b>\n"
-        "/add_sub логин план - выдать подписку\n"
+        "/add_sub логин дни - выдать подписку (любое количество дней)\n"
         "/subs - список подписок\n"
         "/users - список пользователей\n\n"
-        "<b>⚙️ ПЛАНЫ</b>\n"
-        "2_days, 1_week, 1_month, forever\n\n"
+        "<b>⚙️ ПРИМЕРЫ</b>\n"
+        "/add_sub amnesia 7 - подписка на 7 дней\n"
+        "/add_sub amnesia 30 - на месяц\n"
+        "/add_sub amnesia 365 - на год\n\n"
         "<b>📊 СТАТУС</b>\n"
         "/stats - статистика",
         parse_mode='HTML'
@@ -256,11 +258,20 @@ async def add_subscription(message: Message):
     
     args = message.get_args().split()
     if len(args) < 2:
-        await message.answer("❌ /add_sub логин_сайта план\nВарианты: 2_days, 1_week, 1_month, forever")
+        await message.answer("❌ /add_sub логин_сайта ДНЕЙ\nПример: /add_sub amnesia 7\n\n📌 Доступно любое количество дней (1, 3, 7, 14, 30, 365 и т.д.)")
         return
     
     login = args[0]
-    plan = args[1]
+    
+    # Парсим количество дней
+    try:
+        days = int(args[1])
+        if days < 1:
+            await message.answer("❌ Количество дней должно быть больше 0")
+            return
+    except ValueError:
+        await message.answer("❌ Вторым аргументом укажите количество дней (целое число)\nПример: /add_sub amnesia 7")
+        return
     
     cursor.execute('SELECT id, login FROM web_users WHERE login=?', (login,))
     row = cursor.fetchone()
@@ -273,26 +284,15 @@ async def add_subscription(message: Message):
     user_login = row[1]
     
     start_date = datetime.now()
-    
-    if plan == '2_days':
-        end_date = start_date + timedelta(days=2)
-    elif plan == '1_week':
-        end_date = start_date + timedelta(days=7)
-    elif plan == '1_month':
-        end_date = start_date + timedelta(days=30)
-    elif plan == 'forever':
-        end_date = start_date + timedelta(days=365*10)
-    else:
-        await message.answer("❌ Неверный план. Доступны: 2_days, 1_week, 1_month, forever")
-        return
+    end_date = start_date + timedelta(days=days)
     
     cursor.execute('''
         INSERT OR REPLACE INTO subscriptions (user_id, login, plan_type, start_date, end_date, status)
         VALUES (?, ?, ?, ?, ?, 'active')
-    ''', (user_id, user_login, plan, start_date.isoformat(), end_date.isoformat()))
+    ''', (user_id, user_login, f"{days}_days", start_date.isoformat(), end_date.isoformat()))
     conn.commit()
     
-    await message.answer(f"✅ Подписка {plan} выдана для {user_login}\n📅 Истекает: {end_date.strftime('%d.%m.%Y')}")
+    await message.answer(f"✅ Подписка на {days} дней выдана для {user_login}\n📅 Истекает: {end_date.strftime('%d.%m.%Y')}")
 
 @dp.message_handler(commands=['subs'])
 async def list_subscriptions(message: Message):
@@ -308,8 +308,10 @@ async def list_subscriptions(message: Message):
     
     text = "📋 <b>ПОДПИСКИ</b>\n\n"
     for login, plan, end_date, status in rows:
+        # Извлекаем количество дней из plan_type
+        days = plan.replace('_days', '') if plan else '?'
         emoji = "✅" if status == "active" else "❌"
-        text += f"{emoji} {login} — {plan}\n   до {end_date[:10]}\n"
+        text += f"{emoji} {login} — {days} дней\n   до {end_date[:10]}\n"
     
     await message.answer(text[:4000], parse_mode='HTML')
 
@@ -335,7 +337,8 @@ async def cmd_users(message: Message):
     for uid, login, created, plan, end_date, status in rows:
         sub_info = ""
         if plan:
-            sub_info = f"\n   📅 {plan} до {end_date[:10]}"
+            days = plan.replace('_days', '')
+            sub_info = f"\n   📅 {days} дней до {end_date[:10]}"
         out += f"• {login} (ID: {uid})\n   📅 Рег: {created[:10]}{sub_info}\n\n"
         if len(out) > 3500:
             await message.answer(out, parse_mode='HTML')
@@ -369,7 +372,8 @@ def run_web():
 # ========== ЗАПУСК ==========
 async def main():
     print(f"🚀 SHADOW TOOL запущен")
-    print(f"🤖 Бот: https://t.me/{(await bot.get_me()).username}")
+    me = await bot.get_me()
+    print(f"🤖 Бот: https://t.me/{me.username}")
 
 if __name__ == '__main__':
     from threading import Thread
