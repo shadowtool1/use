@@ -21,7 +21,7 @@ BOT_TOKEN = os.environ.get('BOT_TOKEN', '')
 ADMIN_IDS_RAW = os.environ.get('ADMIN_ID', '')
 WHITELIST_GIST_URL = os.environ.get('WHITELIST_GIST_URL', 'https://gist.githubusercontent.com/shadowtool1/af1959fc4b147c2ddc549c862d63cd9b/raw/whitelist.json')
 
-# Парсим ADMIN_ID (поддержка одного или нескольких ID через запятую)
+# Парсим ADMIN_ID (поддержка нескольких ID через запятую)
 ADMIN_IDS = []
 if ADMIN_IDS_RAW:
     for part in ADMIN_IDS_RAW.split(','):
@@ -239,38 +239,38 @@ async def cmd_start(message: Message):
     await message.answer(
         "🔰 <b>SHADOW TOOL - АДМИН ПАНЕЛЬ</b>\n\n"
         "<b>📋 ПОДПИСКИ</b>\n"
-        "/add_sub логин дни - выдать подписку (любое количество дней)\n"
+        "/addsub логин дни - выдать подписку\n"
+        "/delsub логин - удалить подписку\n"
         "/subs - список подписок\n"
         "/users - список пользователей\n\n"
         "<b>⚙️ ПРИМЕРЫ</b>\n"
-        "/add_sub amnesia 7 - подписка на 7 дней\n"
-        "/add_sub amnesia 30 - на месяц\n"
-        "/add_sub amnesia 365 - на год\n\n"
+        "/addsub amnesia 7 - подписка на 7 дней\n"
+        "/addsub amnesia 30 - на месяц\n"
+        "/delsub amnesia - удалить подписку\n\n"
         "<b>📊 СТАТУС</b>\n"
         "/stats - статистика",
         parse_mode='HTML'
     )
 
-@dp.message_handler(commands=['add_sub'])
+@dp.message_handler(commands=['addsub'])
 async def add_subscription(message: Message):
     if not is_admin(message.from_user.id):
         return
     
     args = message.get_args().split()
     if len(args) < 2:
-        await message.answer("❌ /add_sub логин_сайта ДНЕЙ\nПример: /add_sub amnesia 7\n\n📌 Доступно любое количество дней (1, 3, 7, 14, 30, 365 и т.д.)")
+        await message.answer("❌ /addsub логин_сайта ДНЕЙ\nПример: /addsub amnesia 7")
         return
     
     login = args[0]
     
-    # Парсим количество дней
     try:
         days = int(args[1])
         if days < 1:
             await message.answer("❌ Количество дней должно быть больше 0")
             return
     except ValueError:
-        await message.answer("❌ Вторым аргументом укажите количество дней (целое число)\nПример: /add_sub amnesia 7")
+        await message.answer("❌ Вторым аргументом укажите количество дней (целое число)")
         return
     
     cursor.execute('SELECT id, login FROM web_users WHERE login=?', (login,))
@@ -286,32 +286,61 @@ async def add_subscription(message: Message):
     start_date = datetime.now()
     end_date = start_date + timedelta(days=days)
     
+    # Удаляем старую активную подписку перед добавлением новой
+    cursor.execute('UPDATE subscriptions SET status="expired" WHERE user_id=? AND status="active"', (user_id,))
+    
     cursor.execute('''
-        INSERT OR REPLACE INTO subscriptions (user_id, login, plan_type, start_date, end_date, status)
+        INSERT INTO subscriptions (user_id, login, plan_type, start_date, end_date, status)
         VALUES (?, ?, ?, ?, ?, 'active')
     ''', (user_id, user_login, f"{days}_days", start_date.isoformat(), end_date.isoformat()))
     conn.commit()
     
     await message.answer(f"✅ Подписка на {days} дней выдана для {user_login}\n📅 Истекает: {end_date.strftime('%d.%m.%Y')}")
 
+@dp.message_handler(commands=['delsub'])
+async def delete_subscription(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    
+    args = message.get_args().split()
+    if len(args) < 1:
+        await message.answer("❌ /delsub логин_сайта\nПример: /delsub amnesia")
+        return
+    
+    login = args[0]
+    
+    cursor.execute('SELECT id, login FROM web_users WHERE login=?', (login,))
+    row = cursor.fetchone()
+    
+    if not row:
+        await message.answer(f"❌ Пользователь с логином '{login}' не найден")
+        return
+    
+    user_id = row[0]
+    user_login = row[1]
+    
+    # Помечаем подписку как expired
+    cursor.execute('UPDATE subscriptions SET status="expired" WHERE user_id=? AND status="active"', (user_id,))
+    conn.commit()
+    
+    await message.answer(f"✅ Подписка для {user_login} удалена")
+
 @dp.message_handler(commands=['subs'])
 async def list_subscriptions(message: Message):
     if not is_admin(message.from_user.id):
         return
     
-    cursor.execute('SELECT login, plan_type, end_date, status FROM subscriptions ORDER BY end_date DESC LIMIT 30')
+    cursor.execute('SELECT login, plan_type, end_date, status FROM subscriptions WHERE status="active" ORDER BY end_date ASC')
     rows = cursor.fetchall()
     
     if not rows:
-        await message.answer("📭 Нет подписок")
+        await message.answer("📭 Нет активных подписок")
         return
     
-    text = "📋 <b>ПОДПИСКИ</b>\n\n"
+    text = "📋 <b>АКТИВНЫЕ ПОДПИСКИ</b>\n\n"
     for login, plan, end_date, status in rows:
-        # Извлекаем количество дней из plan_type
         days = plan.replace('_days', '') if plan else '?'
-        emoji = "✅" if status == "active" else "❌"
-        text += f"{emoji} {login} — {days} дней\n   до {end_date[:10]}\n"
+        text += f"✅ {login} — {days} дней\n   до {end_date[:10]}\n"
     
     await message.answer(text[:4000], parse_mode='HTML')
 
@@ -339,6 +368,8 @@ async def cmd_users(message: Message):
         if plan:
             days = plan.replace('_days', '')
             sub_info = f"\n   📅 {days} дней до {end_date[:10]}"
+        else:
+            sub_info = "\n   ❌ Нет подписки"
         out += f"• {login} (ID: {uid})\n   📅 Рег: {created[:10]}{sub_info}\n\n"
         if len(out) > 3500:
             await message.answer(out, parse_mode='HTML')
